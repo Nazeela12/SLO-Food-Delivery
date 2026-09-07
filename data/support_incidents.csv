@@ -1,0 +1,11 @@
+incident_id,timestamp,locality,category,severity,customer_complaints,description,status
+INC001,2026-08-29 10:15,RS Puram,Delivery Delay,P2,3,Minor increase in delivery time,Resolved
+INC002,2026-08-29 10:45,Gandhipuram,Payment Issue,P3,1,Occasional payment failure,Resolved
+INC003,2026-08-29 11:05,RS Puram,Delivery Delay,P1,18,Customers reporting major delivery delays,Investigating
+INC004,2026-08-29 11:20,RS Puram,Order Cancellation,P1,12,Orders cancelled due to delivery delays,Investigating
+INC005,2026-08-29 11:30,Peelamedu,Delivery Delay,P3,2,Slight increase in delivery time,Resolved
+INC006,2026-08-29 11:35,Gandhipuram,App Performance,P3,2,Slow app response for some users,Resolved
+INC007,2026-08-29 11:40,RS Puram,Delivery Delay,P1,25,Large number of customers affected by delays,Investigating
+INC008,2026-08-29 11:50,Singanallur,Delivery Delay,P3,3,Minor delivery delays,Resolved
+INC009,2026-08-29 12:00,RS Puram,Order Cancellation,P1,15,Customers cancelling delayed orders,Investigating
+INC010,2026-08-29 12:05,Saibaba Colony,Payment Issue,P3,1,Single payment failure,Resolved

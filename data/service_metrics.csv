@@ -1,0 +1,21 @@
+metric_id,timestamp,locality,service_name,total_orders,on_time_orders,failed_orders,avg_delivery_minutes,error_rate,availability_percent
+M001,2026-08-29 10:00,RS Puram,Delivery Service,100,96,4,34,0.04,99.5
+M002,2026-08-29 10:30,RS Puram,Delivery Service,120,114,6,36,0.05,99.3
+M003,2026-08-29 11:00,RS Puram,Delivery Service,150,132,18,42,0.12,98.5
+M004,2026-08-29 11:30,RS Puram,Delivery Service,180,135,45,49,0.25,96.8
+M005,2026-08-29 10:00,Gandhipuram,Delivery Service,110,106,4,31,0.04,99.6
+M006,2026-08-29 10:30,Gandhipuram,Delivery Service,115,111,4,32,0.03,99.7
+M007,2026-08-29 11:00,Gandhipuram,Delivery Service,120,116,4,31,0.03,99.7
+M008,2026-08-29 11:30,Gandhipuram,Delivery Service,125,121,4,32,0.03,99.8
+M009,2026-08-29 10:00,Peelamedu,Delivery Service,105,101,4,32,0.04,99.5
+M010,2026-08-29 10:30,Peelamedu,Delivery Service,115,109,6,34,0.05,99.4
+M011,2026-08-29 11:00,Peelamedu,Delivery Service,125,116,9,36,0.07,99.1
+M012,2026-08-29 11:30,Peelamedu,Delivery Service,130,119,11,37,0.08,98.9
+M013,2026-08-29 10:00,Saibaba Colony,Delivery Service,90,87,3,30,0.03,99.7
+M014,2026-08-29 10:30,Saibaba Colony,Delivery Service,95,92,3,31,0.03,99.7
+M015,2026-08-29 11:00,Saibaba Colony,Delivery Service,100,97,3,31,0.03,99.8
+M016,2026-08-29 11:30,Saibaba Colony,Delivery Service,105,102,3,32,0.03,99.8
+M017,2026-08-29 10:00,Singanallur,Delivery Service,100,96,4,31,0.04,99.6
+M018,2026-08-29 10:30,Singanallur,Delivery Service,110,105,5,33,0.05,99.5
+M019,2026-08-29 11:00,Singanallur,Delivery Service,120,114,6,34,0.05,99.4
+M020,2026-08-29 11:30,Singanallur,Delivery Service,130,123,7,35,0.05,99.3

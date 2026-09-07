@@ -1,0 +1,7 @@
+feature_id,feature_name,locality,planned_release,business_value,engineering_effort,status
+FP001,One-click reorder,All,2026-09-15,Increase repeat orders,40,Planned
+FP002,Live delivery map,RS Puram,2026-09-20,Improve delivery visibility,32,Planned
+FP003,Smart restaurant recommendations,Gandhipuram,2026-09-25,Improve personalization,48,Planned
+FP004,Scheduled delivery,Peelamedu,2026-10-01,Improve customer convenience,36,Planned
+FP005,Group ordering,Saibaba Colony,2026-10-05,Increase order volume,44,Planned
+FP006,Loyalty rewards,Singanallur,2026-10-10,Increase customer retention,50,Planned

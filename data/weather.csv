@@ -1,0 +1,21 @@
+weather_id,locality,timestamp,rainfall_mm,temperature_c,weather_condition
+W001,RS Puram,2026-08-29 10:00,0,30,Clear
+W002,RS Puram,2026-08-29 10:30,5,29,Light Rain
+W003,RS Puram,2026-08-29 11:00,18,28,Moderate Rain
+W004,RS Puram,2026-08-29 11:30,42,26,Heavy Rain
+W005,Gandhipuram,2026-08-29 10:00,0,31,Clear
+W006,Gandhipuram,2026-08-29 10:30,0,31,Clear
+W007,Gandhipuram,2026-08-29 11:00,2,30,Light Rain
+W008,Gandhipuram,2026-08-29 11:30,0,30,Clear
+W009,Peelamedu,2026-08-29 10:00,0,30,Clear
+W010,Peelamedu,2026-08-29 10:30,4,29,Light Rain
+W011,Peelamedu,2026-08-29 11:00,8,28,Light Rain
+W012,Peelamedu,2026-08-29 11:30,12,28,Moderate Rain
+W013,Saibaba Colony,2026-08-29 10:00,0,30,Clear
+W014,Saibaba Colony,2026-08-29 10:30,0,30,Clear
+W015,Saibaba Colony,2026-08-29 11:00,1,29,Light Rain
+W016,Saibaba Colony,2026-08-29 11:30,0,30,Clear
+W017,Singanallur,2026-08-29 10:00,0,31,Clear
+W018,Singanallur,2026-08-29 10:30,3,30,Light Rain
+W019,Singanallur,2026-08-29 11:00,6,29,Light Rain
+W020,Singanallur,2026-08-29 11:30,10,28,Moderate Rain

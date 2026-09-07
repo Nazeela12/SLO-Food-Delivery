@@ -1,0 +1,21 @@
+order_id,locality,order_time,delivery_time,delivery_status,delivery_minutes
+ORD001,RS Puram,2026-08-29 10:05,2026-08-29 10:32,Delivered,27
+ORD002,RS Puram,2026-08-29 10:10,2026-08-29 10:48,Delivered,38
+ORD003,RS Puram,2026-08-29 10:15,2026-08-29 11:02,Delivered,47
+ORD004,Gandhipuram,2026-08-29 10:20,2026-08-29 10:48,Delivered,28
+ORD005,Gandhipuram,2026-08-29 10:25,2026-08-29 10:57,Delivered,32
+ORD006,Peelamedu,2026-08-29 10:30,2026-08-29 11:01,Delivered,31
+ORD007,Peelamedu,2026-08-29 10:35,2026-08-29 11:08,Delivered,33
+ORD008,Saibaba Colony,2026-08-29 10:40,2026-08-29 11:10,Delivered,30
+ORD009,Saibaba Colony,2026-08-29 10:45,2026-08-29 11:17,Delivered,32
+ORD010,Singanallur,2026-08-29 10:50,2026-08-29 11:20,Delivered,30
+ORD011,Singanallur,2026-08-29 10:55,2026-08-29 11:28,Delivered,33
+ORD012,RS Puram,2026-08-29 11:00,2026-08-29 11:44,Delivered,44
+ORD013,RS Puram,2026-08-29 11:05,2026-08-29 11:55,Delivered,50
+ORD014,RS Puram,2026-08-29 11:10,2026-08-29 11:58,Delivered,48
+ORD015,Gandhipuram,2026-08-29 11:15,2026-08-29 11:43,Delivered,28
+ORD016,Gandhipuram,2026-08-29 11:20,2026-08-29 11:49,Delivered,29
+ORD017,Peelamedu,2026-08-29 11:25,2026-08-29 11:56,Delivered,31
+ORD018,Peelamedu,2026-08-29 11:30,2026-08-29 12:03,Delivered,33
+ORD019,Saibaba Colony,2026-08-29 11:35,2026-08-29 12:07,Delivered,32
+ORD020,Singanallur,2026-08-29 11:40,2026-08-29 12:12,Delivered,32

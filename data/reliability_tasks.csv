@@ -1,0 +1,9 @@
+task_id,task_title,locality,service_area,priority,estimated_effort_hours,status,description
+RT001,Increase delivery capacity during rain,RS Puram,Delivery Capacity,P1,16,Open,Add temporary delivery capacity for weather-driven demand spikes
+RT002,Optimize delivery partner allocation,RS Puram,Dispatch,P1,12,Open,Improve rider allocation when demand increases
+RT003,Add rain-aware ETA calculation,RS Puram,ETA Service,P2,24,Planned,Adjust estimated delivery time using rainfall and traffic conditions
+RT004,Improve payment retry handling,Gandhipuram,Payments,P2,10,In Progress,Reduce failed payments through controlled retry logic
+RT005,Optimize dispatch batching,Peelamedu,Dispatch,P3,18,Planned,Improve batching efficiency during moderate demand
+RT006,Improve API response time,Saibaba Colony,Platform,P3,20,Planned,Reduce latency for order tracking requests
+RT007,Add locality-level demand forecasting,Singanallur,Forecasting,P2,30,Planned,Forecast demand using locality and weather signals
+RT008,Create weather alert integration,RS Puram,Weather Integration,P2,14,Planned,Generate operational alerts when rainfall exceeds threshold
