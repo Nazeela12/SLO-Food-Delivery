@@ -1,18 +1,14 @@
 from datetime import datetime, timedelta
+from src.telemetry_schema import TelemetryEvent
 
 
 class EventProcessor:
 
     def __init__(self, allowed_delay_seconds=30):
-
-        self.allowed_delay = timedelta(
-            seconds=allowed_delay_seconds
-        )
+        self.allowed_delay = timedelta(seconds=allowed_delay_seconds)
 
         self.processed_event_ids = set()
-
         self.order_state = {}
-
         self.latest_event_time = None
 
         self.stats = {
@@ -24,16 +20,17 @@ class EventProcessor:
 
     def process_event(self, event):
 
-        event_id = event["event_id"]
-        order_id = event["order_id"]
+        # Validate the incoming telemetry event
+        validated_event = TelemetryEvent.model_validate(event)
 
-        event_time = datetime.fromisoformat(
-            event["event_time"]
-        )
+        # Use the validated values
+        event_id = validated_event.event_id
+        order_id = validated_event.order_id
+        event_time = validated_event.event_time
+        status = validated_event.status
 
-        # Duplicate detection
+        # Check for duplicate event
         if event_id in self.processed_event_ids:
-
             self.stats["duplicates"] += 1
 
             return {
@@ -42,7 +39,7 @@ class EventProcessor:
                 "message": "Duplicate event ignored."
             }
 
-        # Out-of-order detection
+        # Check whether the event is out of order
         out_of_order = False
 
         if self.latest_event_time is not None:
@@ -51,28 +48,25 @@ class EventProcessor:
                 out_of_order = True
                 self.stats["out_of_order"] += 1
 
-        # Delayed event detection
+        # Check whether the event is delayed
         delayed = False
 
         if self.latest_event_time is not None:
 
-            if (
-                self.latest_event_time - event_time
-                > self.allowed_delay
-            ):
+            if self.latest_event_time - event_time > self.allowed_delay:
                 delayed = True
                 self.stats["delayed"] += 1
 
-        # Record event ID
+        # Mark event as processed
         self.processed_event_ids.add(event_id)
 
-        # Update order state safely
+        # Get current state of the order
         current_state = self.order_state.get(order_id)
 
         if current_state is None:
 
             self.order_state[order_id] = {
-                "status": event["status"],
+                "status": status,
                 "event_time": event_time
             }
 
@@ -80,11 +74,11 @@ class EventProcessor:
 
             current_event_time = current_state["event_time"]
 
-            # Older events cannot overwrite newer state
+            # Only update state when the new event is newer
             if event_time >= current_event_time:
 
                 self.order_state[order_id] = {
-                    "status": event["status"],
+                    "status": status,
                     "event_time": event_time
                 }
 
@@ -95,28 +89,28 @@ class EventProcessor:
         ):
             self.latest_event_time = event_time
 
+        # Count successfully processed event
         self.stats["processed"] += 1
 
+        # Determine final processing status
         if delayed:
-            status = "delayed"
+            result_status = "delayed"
 
         elif out_of_order:
-            status = "out_of_order"
+            result_status = "out_of_order"
 
         else:
-            status = "processed"
+            result_status = "processed"
 
         return {
-            "status": status,
+            "status": result_status,
             "event_id": event_id,
             "order_id": order_id,
             "message": "Event processed safely."
         }
 
     def get_order_state(self, order_id):
-
         return self.order_state.get(order_id)
 
     def get_statistics(self):
-
         return self.stats.copy()

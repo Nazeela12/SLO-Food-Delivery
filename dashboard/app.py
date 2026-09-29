@@ -1,177 +1,305 @@
 import streamlit as st
 import pandas as pd
-import sys
 from pathlib import Path
-import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
+import sys
 
 
-# =========================================================
+# ============================================================
 # PROJECT PATH
-# =========================================================
+# ============================================================
 
-ROOT_DIR = Path(__file__).resolve().parent.parent
-sys.path.append(str(ROOT_DIR))
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DATA_DIR = PROJECT_ROOT / "data"
+
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.decision_engine import evaluate_locality
-from src.priority_metrics import (
-    calculate_priority_justification
-)
+from src.priority_metrics import calculate_priority_justification
 from src.event_processor import EventProcessor
+from src.audit_store import AuditStore
+from src.sensitivity_analysis import run_sensitivity_analysis
+from src.sensitivity_analysis import calculate_priority_stability
 
-# =========================================================
-# STREAMLIT PAGE CONFIGURATION
-# =========================================================
+
+# ============================================================
+# PAGE CONFIG
+# ============================================================
 
 st.set_page_config(
-    page_title="Food Delivery SLO Decision Dashboard",
-    page_icon="🍔",
-    layout="wide"
+    page_title="FoodPulse | SLO Decision Center",
+    page_icon="◈",
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
 
-# =========================================================
-# DATA DIRECTORY
-# =========================================================
+# ============================================================
+# SIMPLE NATIVE UI STYLING
+# ============================================================
 
-DATA_DIR = ROOT_DIR / "data"
+# IMPORTANT:
+# This dashboard does NOT depend on HTML rendering.
+# All visible components below use native Streamlit widgets.
 
+st.title("FoodPulse Reliability Console")
 
-# =========================================================
-# LOAD DATA
-# =========================================================
-
-@st.cache_data
-def load_data():
-
-    service = pd.read_csv(
-        DATA_DIR / "service_metrics.csv"
-    )
-
-    weather = pd.read_csv(
-        DATA_DIR / "weather.csv"
-    )
-
-    support = pd.read_csv(
-        DATA_DIR / "support_incidents.csv"
-    )
-
-    reliability = pd.read_csv(
-        DATA_DIR / "reliability_tasks.csv"
-    )
-
-    features = pd.read_csv(
-        DATA_DIR / "feature_plans.csv"
-    )
-
-    return (
-        service,
-        weather,
-        support,
-        reliability,
-        features
-    )
-
-
-service, weather, support, reliability, features = load_data()
-# =========================================================
-# EVENT PROCESSOR
-# =========================================================
-
-if "event_processor" not in st.session_state:
-
-    st.session_state.event_processor = EventProcessor(
-        allowed_delay_seconds=30
-    )
-
-# =========================================================
-# PRIORITY JUSTIFICATION METRIC
-# =========================================================
-
-priority_metrics = calculate_priority_justification(
-    service,
-    weather,
-    support,
-    reliability
-)
-
-# =========================================================
-# DASHBOARD HEADER
-# =========================================================
-
-st.title(
-    "🍔 Food Delivery SLO Decision Dashboard"
-)
-
-st.markdown(
-    """
-    **Reliability decisions based on measured user impact,
-    SLO performance, error-budget status and
-    locality-specific weather conditions.**
-    """
+st.caption(
+    "Locality-aware SLO decision support for food-delivery reliability operations."
 )
 
 st.divider()
 
 
-# =========================================================
-# SIDEBAR CONTROLS
-# =========================================================
+# ============================================================
+# DATA LOADING
+# ============================================================
 
-st.sidebar.header("🎛️ Dashboard Controls")
+@st.cache_data
+def load_data():
 
-localities = sorted(
-    service["locality"].unique()
-)
+    service = pd.read_csv(DATA_DIR / "service_metrics.csv")
+    support = pd.read_csv(DATA_DIR / "support_incidents.csv")
+    weather = pd.read_csv(DATA_DIR / "weather.csv")
+    reliability = pd.read_csv(DATA_DIR / "reliability_tasks.csv")
+    features = pd.read_csv(DATA_DIR / "feature_plans.csv")
 
-selected_locality = st.sidebar.selectbox(
-    "Select Locality",
-    localities
-)
-
-
-# =========================================================
-# GET SELECTED LOCALITY DATA
-# =========================================================
-
-service_rows = service[
-    service["locality"] == selected_locality
-]
-
-weather_rows = weather[
-    weather["locality"] == selected_locality
-]
-
-support_rows = support[
-    support["locality"] == selected_locality
-]
+    return service, support, weather, reliability, features
 
 
-# Get latest service record
-service_row = service_rows.iloc[-1]
+service, support, weather, reliability, features = load_data()
 
 
-# Get latest weather record
-weather_row = weather_rows.iloc[-1]
+# ============================================================
+# SQLITE AUDIT
+# ============================================================
+
+DB_PATH = DATA_DIR / "decision_audit.db"
+audit_store = AuditStore(DB_PATH)
 
 
-# Get latest support record
-if len(support_rows) > 0:
+# ============================================================
+# OPTIONAL LEGACY CSV MIGRATION
+# ============================================================
 
-    support_row = support_rows.iloc[-1]
+def migrate_old_audit_if_needed():
 
-else:
+    csv_path = DATA_DIR / "decision_audit.csv"
 
-    support_row = pd.Series(
-        {
+    if not csv_path.exists():
+        return
+
+    try:
+
+        existing = audit_store.get_all_decisions()
+
+        if len(existing) > 0:
+            return
+
+        old_data = pd.read_csv(csv_path)
+
+        if len(old_data) == 0:
+            return
+
+        required_columns = [
+            "decision_id",
+            "timestamp",
+            "locality",
+            "recommended_priority",
+            "recommended_action",
+            "decision",
+            "override_reason",
+            "priority_score",
+            "sli",
+            "slo",
+            "user_impact",
+            "rainfall_mm"
+        ]
+
+        if all(column in old_data.columns for column in required_columns):
+
+            for _, row in old_data.iterrows():
+
+                record = {
+                    "decision_id": str(row["decision_id"]),
+                    "timestamp": str(row["timestamp"]),
+                    "locality": str(row["locality"]),
+                    "recommended_priority": str(
+                        row["recommended_priority"]
+                    ),
+                    "recommended_action": str(
+                        row["recommended_action"]
+                    ),
+                    "decision": str(row["decision"]),
+                    "override_reason": str(
+                        row["override_reason"]
+                    ),
+                    "priority_score": float(
+                        row["priority_score"]
+                    ),
+                    "sli": float(row["sli"]),
+                    "slo": float(row["slo"]),
+                    "user_impact": float(
+                        row["user_impact"]
+                    ),
+                    "rainfall_mm": float(
+                        row["rainfall_mm"]
+                    )
+                }
+
+                try:
+                    audit_store.save_decision(record)
+                except Exception:
+                    pass
+
+    except Exception:
+        pass
+
+
+migrate_old_audit_if_needed()
+
+
+# ============================================================
+# HELPER FUNCTIONS
+# ============================================================
+
+def safe_number(value, decimals=2):
+
+    try:
+        return round(float(value), decimals)
+    except Exception:
+        return 0
+
+
+def find_locality_rows(locality):
+
+    service_rows = service[
+        service["locality"] == locality
+    ]
+
+    weather_rows = weather[
+        weather["locality"] == locality
+    ]
+
+    support_rows = support[
+        support["locality"] == locality
+    ]
+
+    if len(service_rows) == 0:
+        return None, None, None
+
+    service_row = service_rows.iloc[-1]
+
+    if len(weather_rows) > 0:
+        weather_row = weather_rows.iloc[-1]
+    else:
+        weather_row = pd.Series({
+            "rainfall_mm": 0
+        })
+
+    if len(support_rows) > 0:
+        support_row = support_rows.iloc[-1]
+    else:
+        support_row = pd.Series({
             "customer_complaints": 0
-        }
+        })
+
+    return service_row, support_row, weather_row
+
+
+def get_priority_message(priority):
+
+    if "P1" in str(priority):
+        return "🔴 Critical"
+
+    if "P2" in str(priority):
+        return "🟠 High"
+
+    if "P3" in str(priority):
+        return "🔵 Medium"
+
+    return "🟢 Low"
+
+
+# ============================================================
+# SIDEBAR
+# ============================================================
+
+with st.sidebar:
+
+    st.title("FOODPULSE")
+
+    st.caption(
+        "SLO Decision & Reliability Console"
+    )
+
+    st.divider()
+
+    st.subheader("Operations Control")
+
+    localities = sorted(
+        service["locality"]
+        .dropna()
+        .unique()
+        .tolist()
+    )
+
+    selected_locality = st.selectbox(
+        "Monitor locality",
+        localities,
+        index=0
+    )
+
+    st.divider()
+
+    st.subheader("Data Sources")
+
+    st.write("✓ Service telemetry")
+    st.write("✓ Support incidents")
+    st.write("✓ Weather conditions")
+    st.write("✓ Reliability tasks")
+    st.write("✓ Feature plans")
+    st.write("✓ SQLite audit log")
+
+    st.divider()
+
+    st.subheader("System Status")
+
+    st.success("SYSTEM ONLINE")
+
+    st.write("Decision engine: ACTIVE")
+    st.write("Audit persistence: SQLITE")
+    st.write("Event recovery: ENABLED")
+    st.write("Human approval: REQUIRED")
+
+    st.divider()
+
+    st.caption(
+        "Evaluation time: "
+        + datetime.now().strftime(
+            "%d %b %Y, %H:%M"
+        )
     )
 
 
-# =========================================================
-# RUN DECISION ENGINE
-# =========================================================
+# ============================================================
+# CURRENT DECISION
+# ============================================================
+
+service_row, support_row, weather_row = find_locality_rows(
+    selected_locality
+)
+
+
+if service_row is None:
+
+    st.error(
+        f"No service telemetry found for {selected_locality}."
+    )
+
+    st.stop()
+
 
 decision = evaluate_locality(
     service_row,
@@ -180,1176 +308,1227 @@ decision = evaluate_locality(
 )
 
 
-# =========================================================
-# RELIABILITY STATUS
-# =========================================================
+# ============================================================
+# SYSTEM STATUS BANNER
+# ============================================================
 
-st.subheader(
-    f"📍 {selected_locality} Reliability Status"
+status_col1, status_col2, status_col3, status_col4 = st.columns(4)
+
+with status_col1:
+    st.success("SYSTEM OPERATIONAL")
+
+with status_col2:
+    st.info("LIVE DECISION DATA")
+
+with status_col3:
+    st.info("SQLITE AUDIT ENABLED")
+
+with status_col4:
+    st.info("HUMAN-IN-THE-LOOP")
+
+
+# ============================================================
+# TABS
+# ============================================================
+
+(
+    tab_overview,
+    tab_evidence,
+    tab_governance,
+    tab_validation,
+    tab_reliability
+) = st.tabs(
+    [
+        "Overview",
+        "Evidence & Work",
+        "Governance & Audit",
+        "Validation",
+        "Reliability Tests"
+    ]
 )
 
 
-col1, col2, col3, col4 = st.columns(4)
+# ============================================================
+# TAB 1 — OVERVIEW
+# ============================================================
 
+with tab_overview:
 
-with col1:
-
-    st.metric(
-        "SLI",
-        f"{decision['SLI']}%"
+    st.header(
+        f"{selected_locality} Reliability Status"
     )
 
-
-with col2:
-
-    st.metric(
-        "SLO Target",
-        f"{decision['SLO']}%"
+    st.caption(
+        "Current operational view based on service performance, "
+        "user impact, error budget and weather conditions."
     )
 
+    # --------------------------------------------------------
+    # KPI ROW
+    # --------------------------------------------------------
 
-with col3:
+    col1, col2, col3, col4, col5 = st.columns(5)
 
-    st.metric(
-        "Error Budget Remaining",
-        f"{decision['error_budget_remaining']}%"
+    with col1:
+
+        st.metric(
+            "Service SLI",
+            f'{decision["SLI"]:.2f}%',
+            f'SLO {decision["SLO"]:.0f}%'
+        )
+
+    with col2:
+
+        st.metric(
+            "Error Budget",
+            f'{decision["error_budget_remaining"]:.2f}%',
+            "remaining"
+        )
+
+    with col3:
+
+        st.metric(
+            "User Impact",
+            f'{decision["user_impact"]:.2f}',
+            "impact score"
+        )
+
+    with col4:
+
+        st.metric(
+            "Priority Score",
+            f'{decision["priority_score"]:.2f}',
+            decision["priority"]
+        )
+
+    with col5:
+
+        st.metric(
+            "Rainfall",
+            f'{decision["rainfall_mm"]:.1f} mm',
+            "weather factor"
+        )
+
+    st.divider()
+
+    # --------------------------------------------------------
+    # RECOMMENDATION
+    # --------------------------------------------------------
+
+    col_left, col_right = st.columns(
+        [1.4, 1]
     )
 
+    with col_left:
 
-with col4:
+        st.subheader(
+            "Decision Engine Recommendation"
+        )
 
-    st.metric(
-        "User Impact",
-        f"{decision['user_impact']}/100"
+        priority_display = get_priority_message(
+            decision["priority"]
+        )
+
+        st.info(
+            f"Priority: **{priority_display}**"
+        )
+
+        st.write(
+            decision["recommendation"]
+        )
+
+        st.caption(
+            "The recommendation is generated from measured "
+            "operational evidence and requires human confirmation."
+        )
+
+    with col_right:
+
+        st.subheader("Decision Inputs")
+
+        input_data = pd.DataFrame(
+            {
+                "Input": [
+                    "Locality",
+                    "SLO Target",
+                    "Service SLI",
+                    "Customer Complaints",
+                    "Failed Orders",
+                    "Rainfall"
+                ],
+                "Value": [
+                    selected_locality,
+                    f'{decision["SLO"]:.0f}%',
+                    f'{decision["SLI"]:.2f}%',
+                    safe_number(
+                        support_row.get(
+                            "customer_complaints",
+                            0
+                        )
+                    ),
+                    safe_number(
+                        service_row.get(
+                            "failed_orders",
+                            0
+                        )
+                    ),
+                    f'{decision["rainfall_mm"]:.1f} mm'
+                ]
+            }
+        )
+
+        st.dataframe(
+            input_data,
+            use_container_width=True,
+            hide_index=True
+        )
+
+    # --------------------------------------------------------
+    # DECISION LOGIC
+    # --------------------------------------------------------
+
+    st.divider()
+
+    st.subheader("Decision Logic")
+
+    st.write(
+        "The priority score combines **SLO risk, user impact, "
+        "error-budget risk and weather conditions**."
     )
 
+    st.write(
+        "**Weighting:** 40% SLO risk + 35% user impact + "
+        "15% error-budget risk + 10% weather."
+    )
 
-st.divider()
+    logic1, logic2, logic3, logic4 = st.columns(4)
 
+    with logic1:
 
-# =========================================================
-# STATUS INDICATORS
-# =========================================================
+        st.info(
+            f"**SLO Risk**\n\n"
+            f"SLI: {decision['SLI']:.2f}%\n\n"
+            f"Target: {decision['SLO']:.0f}%"
+        )
 
-col1, col2, col3 = st.columns(3)
+    with logic2:
 
+        st.info(
+            f"**User Impact**\n\n"
+            f"Score: {decision['user_impact']:.2f}"
+        )
 
-# ---------------------------------------------------------
-# SLO STATUS
-# ---------------------------------------------------------
+    with logic3:
 
-with col1:
+        st.info(
+            f"**Error Budget**\n\n"
+            f"Remaining: "
+            f"{decision['error_budget_remaining']:.2f}%"
+        )
 
-    if decision["SLI"] < decision["SLO"]:
+    with logic4:
+
+        st.info(
+            f"**Weather**\n\n"
+            f"Rainfall: "
+            f"{decision['rainfall_mm']:.1f} mm"
+        )
+
+    # --------------------------------------------------------
+    # QUICK INTERPRETATION
+    # --------------------------------------------------------
+
+    st.divider()
+
+    st.subheader("Operational Interpretation")
+
+    if decision["priority"].startswith("P1"):
 
         st.error(
-            "❌ SLO BREACH"
+            "Critical reliability condition detected. "
+            "The measured evidence indicates immediate attention."
+        )
+
+    elif decision["priority"].startswith("P2"):
+
+        st.warning(
+            "High reliability priority detected. "
+            "The evidence supports scheduling reliability work."
+        )
+
+    elif decision["priority"].startswith("P3"):
+
+        st.info(
+            "Medium reliability priority detected. "
+            "The locality should be monitored and improvement work "
+            "can be scheduled according to capacity."
         )
 
     else:
 
         st.success(
-            "✅ SLO HEALTHY"
+            "Low immediate reliability risk detected. "
+            "No immediate intervention is indicated by the current evidence."
         )
 
 
-# ---------------------------------------------------------
-# WEATHER STATUS
-# ---------------------------------------------------------
+# ============================================================
+# TAB 2 — EVIDENCE & WORK
+# ============================================================
 
-with col2:
+with tab_evidence:
 
-    rainfall = decision["rainfall_mm"]
+    st.header(
+        "Operational Evidence & Engineering Work"
+    )
 
-    if rainfall >= 30:
+    st.caption(
+        "Evidence chain connecting telemetry to reliability tasks "
+        "and feature planning."
+    )
 
-        st.error(
-            f"🌧️ Heavy Rain — {rainfall} mm"
+    evidence1, evidence2 = st.columns(2)
+
+    # --------------------------------------------------------
+    # SERVICE TELEMETRY
+    # --------------------------------------------------------
+
+    with evidence1:
+
+        st.subheader("Service Telemetry")
+
+        service_display = pd.DataFrame(
+            [service_row]
         )
 
-    elif rainfall >= 15:
-
-        st.warning(
-            f"🌧️ Moderate Rain — {rainfall} mm"
+        st.dataframe(
+            service_display,
+            use_container_width=True,
+            hide_index=True
         )
 
-    else:
+        st.subheader("Support Evidence")
 
-        st.success(
-            f"☀️ Low Weather Risk — {rainfall} mm"
+        support_display = pd.DataFrame(
+            [support_row]
         )
 
-
-# ---------------------------------------------------------
-# PRIORITY STATUS
-# ---------------------------------------------------------
-
-with col3:
-
-    priority = decision["priority"]
-
-    if priority.startswith("P1"):
-
-        st.error(
-            f"🔴 {priority}"
+        st.dataframe(
+            support_display,
+            use_container_width=True,
+            hide_index=True
         )
 
-    elif priority.startswith("P2"):
+    # --------------------------------------------------------
+    # WEATHER + RELIABILITY
+    # --------------------------------------------------------
 
-        st.warning(
-            f"🟠 {priority}"
+    with evidence2:
+
+        st.subheader("Weather Evidence")
+
+        weather_display = pd.DataFrame(
+            [weather_row]
+        )
+
+        st.dataframe(
+            weather_display,
+            use_container_width=True,
+            hide_index=True
+        )
+
+        st.subheader("Reliability Work")
+
+        reliability_locality = reliability[
+            reliability["locality"] == selected_locality
+        ]
+
+        if len(reliability_locality) == 0:
+
+            st.info(
+                "No locality-specific reliability tasks found."
+            )
+
+        else:
+
+            st.dataframe(
+                reliability_locality,
+                use_container_width=True,
+                hide_index=True
+            )
+
+    # --------------------------------------------------------
+    # FEATURE PLANS
+    # --------------------------------------------------------
+
+    st.divider()
+
+    st.subheader("Feature Plans")
+
+    feature_locality = features[
+        features["locality"]
+        .astype(str)
+        .str.lower()
+        .isin(
+            [
+                selected_locality.lower(),
+                "all"
+            ]
+        )
+    ]
+
+    if len(feature_locality) > 0:
+
+        st.dataframe(
+            feature_locality,
+            use_container_width=True,
+            hide_index=True
         )
 
     else:
 
         st.info(
-            f"🟢 {priority}"
+            "No matching feature plans found."
         )
 
 
-st.divider()
+# ============================================================
+# TAB 3 — GOVERNANCE & AUDIT
+# ============================================================
 
+with tab_governance:
 
-# =========================================================
-# ENGINEERING RECOMMENDATION
-# =========================================================
-
-st.subheader(
-    "🤖 Engineering Recommendation"
-)
-
-st.info(
-    decision["recommendation"]
-)
-
-
-# =========================================================
-# EVIDENCE BEHIND RECOMMENDATION
-# =========================================================
-
-st.subheader(
-    "🔎 Evidence Behind Recommendation"
-)
-
-
-evidence_col1, evidence_col2 = st.columns(2)
-
-
-# ---------------------------------------------------------
-# SERVICE EVIDENCE
-# ---------------------------------------------------------
-
-with evidence_col1:
-
-    st.markdown(
-        "### 📊 Service Evidence"
+    st.header(
+        "Decision Approval & Audit Trail"
     )
 
-    st.write(
-        f"**SLI:** {decision['SLI']}%"
+    st.caption(
+        "Human-in-the-loop governance with persistent SQLite audit storage."
     )
-
-    st.write(
-        f"**SLO:** {decision['SLO']}%"
-    )
-
-    st.write(
-        f"**Error Budget Remaining:** "
-        f"{decision['error_budget_remaining']}%"
-    )
-
-    st.write(
-        f"**Total Orders:** "
-        f"{service_row['total_orders']}"
-    )
-
-    st.write(
-        f"**Failed Orders:** "
-        f"{service_row['failed_orders']}"
-    )
-
-    st.write(
-        f"**Average Delivery Time:** "
-        f"{service_row['avg_delivery_minutes']} minutes"
-    )
-
-
-# ---------------------------------------------------------
-# USER + WEATHER EVIDENCE
-# ---------------------------------------------------------
-
-with evidence_col2:
-
-    st.markdown(
-        "### 👥 User & Weather Evidence"
-    )
-
-    st.write(
-        f"**Customer Complaints:** "
-        f"{support_row['customer_complaints']}"
-    )
-
-    st.write(
-        f"**Rainfall:** "
-        f"{weather_row['rainfall_mm']} mm"
-    )
-
-    st.write(
-        f"**Weather Condition:** "
-        f"{weather_row['weather_condition']}"
-    )
-
-    st.write(
-        f"**Priority Score:** "
-        f"{decision['priority_score']}"
-    )
-
-
-st.divider()
-
-
-# =========================================================
-# RELIABILITY TASKS
-# =========================================================
-
-st.subheader(
-    "🛠️ Available Reliability Tasks"
-)
-
-
-locality_tasks = reliability[
-    (reliability["locality"] == selected_locality)
-    |
-    (reliability["locality"] == "All")
-]
-
-
-if len(locality_tasks) > 0:
-
-    st.dataframe(
-        locality_tasks[
-            [
-                "task_id",
-                "task_title",
-                "service_area",
-                "priority",
-                "estimated_effort_hours",
-                "status"
-            ]
-        ],
-        use_container_width=True
-    )
-
-else:
 
     st.info(
-        "No locality-specific reliability tasks found."
+        "The decision engine provides a recommendation. "
+        "A human operator must approve, reject or override the recommendation. "
+        "Every saved decision is persisted in SQLite for traceability."
     )
 
+    # --------------------------------------------------------
+    # CURRENT RECOMMENDATION
+    # --------------------------------------------------------
 
-st.divider()
+    st.subheader("Current Recommendation")
 
+    rec1, rec2, rec3 = st.columns(3)
 
-# =========================================================
-# FEATURE PLANS
-# =========================================================
+    with rec1:
 
-st.subheader(
-    "🚀 Competing Feature Plans"
-)
-
-
-feature_display = features[
-    (features["locality"] == selected_locality)
-    |
-    (features["locality"] == "All")
-]
-
-
-if len(feature_display) > 0:
-
-    st.dataframe(
-        feature_display[
-            [
-                "feature_id",
-                "feature_name",
-                "business_value",
-                "engineering_effort",
-                "status"
-            ]
-        ],
-        use_container_width=True
-    )
-
-else:
-
-    st.info(
-        "No feature plans found."
-    )
-
-
-st.divider()
-
-
-# =========================================================
-# DECISION SUMMARY
-# =========================================================
-
-st.subheader(
-    "📋 Decision Summary"
-)
-
-
-summary = pd.DataFrame(
-    {
-        "Metric": [
+        st.metric(
             "Locality",
-            "SLI",
-            "SLO",
-            "Error Budget Remaining",
-            "User Impact",
-            "Rainfall",
-            "Priority Score",
-            "Priority"
-        ],
+            selected_locality
+        )
 
-        "Value": [
-            decision["locality"],
-            f"{decision['SLI']}%",
-            f"{decision['SLO']}%",
-            f"{decision['error_budget_remaining']}%",
-            decision["user_impact"],
-            f"{decision['rainfall_mm']} mm",
-            decision["priority_score"],
+    with rec2:
+
+        st.metric(
+            "Recommended Priority",
             decision["priority"]
-        ]
-    }
-)
+        )
 
+    with rec3:
 
-st.table(summary)
+        st.metric(
+            "Priority Score",
+            f'{decision["priority_score"]:.2f}'
+        )
 
-
-# =========================================================
-# HUMAN DECISION + MANUAL OVERRIDE
-# =========================================================
-
-st.divider()
-
-st.subheader(
-    "👤 Human Decision"
-)
-
-st.write(
-    """
-    The system provides an engineering recommendation,
-    but the final decision remains with a human stakeholder.
-    High-impact reliability decisions require human confirmation.
-    """
-)
-
-
-# =========================================================
-# SHOW CURRENT RECOMMENDATION
-# =========================================================
-
-st.markdown(
-    "### 🤖 System Recommendation"
-)
-
-st.info(
-    f"**{decision['priority']}**\n\n"
-    f"{decision['recommendation']}"
-)
-
-
-# =========================================================
-# HUMAN DECISION OPTION
-# =========================================================
-
-decision_choice = st.radio(
-    "Choose an action:",
-    [
-        "Approve Recommendation",
-        "Override Recommendation"
-    ]
-)
-
-
-# =========================================================
-# OVERRIDE REASON
-# =========================================================
-
-override_reason = ""
-
-
-if decision_choice == "Override Recommendation":
-
-    st.warning(
-        "⚠️ You are overriding the system recommendation."
+    st.write(
+        "**Recommendation:**"
     )
 
-    override_reason = st.text_area(
-        "Reason for override (required):",
-        placeholder=(
-            "Explain why the recommended action is being overridden."
-        )
+    st.write(
+        decision["recommendation"]
     )
 
-    if override_reason.strip() == "":
+    st.divider()
 
-        st.warning(
-            "⚠️ Please provide an override reason before submitting."
-        )
+    # --------------------------------------------------------
+    # HUMAN DECISION
+    # --------------------------------------------------------
 
+    st.subheader("Human Decision")
 
-# =========================================================
-# SUBMIT DECISION
-# =========================================================
+    decision_choice = st.radio(
+        "Select operator decision",
+        [
+            "Approved",
+            "Rejected",
+            "Overridden"
+        ],
+        horizontal=True
+    )
 
-if st.button(
-    "Submit Decision",
-    type="primary"
-):
+    override_reason = ""
 
-    # -----------------------------------------------------
-    # VALIDATE OVERRIDE
-    # -----------------------------------------------------
+    if decision_choice == "Overridden":
 
-    if (
-        decision_choice == "Override Recommendation"
-        and override_reason.strip() == ""
-    ):
-
-        st.error(
-            "❌ Override reason is required."
-        )
-
-
-    else:
-
-        # -------------------------------------------------
-        # GENERATE UNIQUE DECISION ID
-        # -------------------------------------------------
-
-        decision_id = str(
-            uuid.uuid4()
-        )
-
-
-        # -------------------------------------------------
-        # GENERATE TIMESTAMP
-        # -------------------------------------------------
-
-        timestamp = datetime.now().isoformat()
-
-
-        # -------------------------------------------------
-        # CREATE AUDIT RECORD
-        # -------------------------------------------------
-
-        audit_record = pd.DataFrame(
-            [
-                {
-                    "decision_id": decision_id,
-
-                    "timestamp": timestamp,
-
-                    "locality": decision["locality"],
-
-                    "recommended_priority":
-                        decision["priority"],
-
-                    "recommended_action":
-                        decision["recommendation"],
-
-                    "decision":
-                        decision_choice,
-
-                    "override_reason":
-                        override_reason,
-
-                    "priority_score":
-                        decision["priority_score"],
-
-                    "sli":
-                        decision["SLI"],
-
-                    "slo":
-                        decision["SLO"],
-
-                    "user_impact":
-                        decision["user_impact"],
-
-                    "rainfall_mm":
-                        decision["rainfall_mm"]
-                }
-            ]
-        )
-
-
-        # -------------------------------------------------
-        # AUDIT FILE
-        # -------------------------------------------------
-
-        audit_file = (
-            DATA_DIR / "decision_audit.csv"
-        )
-
-
-        # -------------------------------------------------
-        # SAVE AUDIT RECORD
-        # -------------------------------------------------
-
-        audit_record.to_csv(
-            audit_file,
-            mode="a",
-            header=False,
-            index=False
-        )
-
-
-        # -------------------------------------------------
-        # SUCCESS MESSAGE
-        # -------------------------------------------------
-
-        st.success(
-            "✅ Decision recorded successfully!"
-        )
-
-
-        st.write(
-            f"**Decision ID:** `{decision_id}`"
-        )
-
-        st.write(
-            f"**Decision:** {decision_choice}"
-        )
-
-        if decision_choice == "Override Recommendation":
-
-            st.write(
-                f"**Override Reason:** {override_reason}"
+        override_reason = st.text_area(
+            "Reason for override",
+            placeholder=(
+                "Example: Incident already mitigated; "
+                "reliability work deferred to next sprint."
             )
-
-
-# =========================================================
-# AUDIT TRAIL VIEWER
-# =========================================================
-
-st.divider()
-
-st.subheader(
-    "📜 Decision Audit Trail"
-)
-
-
-audit_file = (
-    DATA_DIR / "decision_audit.csv"
-)
-
-
-if audit_file.exists():
-
-    try:
-
-        audit_data = pd.read_csv(
-            audit_file
         )
 
-        if len(audit_data) > 0:
+    save_decision = st.button(
+        "Save Decision to Audit Log",
+        type="primary"
+    )
 
-            st.dataframe(
-                audit_data,
-                use_container_width=True
+    if save_decision:
+
+        if (
+            decision_choice == "Overridden"
+            and not override_reason.strip()
+        ):
+
+            st.warning(
+                "Please provide an override reason before saving."
             )
 
         else:
+
+            decision_id = (
+                "DEC-"
+                + datetime.now().strftime(
+                    "%Y%m%d%H%M%S%f"
+                )
+            )
+
+            record = {
+                "decision_id": decision_id,
+                "timestamp": datetime.now().isoformat(
+                    timespec="seconds"
+                ),
+                "locality": selected_locality,
+                "recommended_priority": decision["priority"],
+                "recommended_action": decision["recommendation"],
+                "decision": decision_choice,
+                "override_reason": override_reason,
+                "priority_score": float(
+                    decision["priority_score"]
+                ),
+                "sli": float(
+                    decision["SLI"]
+                ),
+                "slo": float(
+                    decision["SLO"]
+                ),
+                "user_impact": float(
+                    decision["user_impact"]
+                ),
+                "rainfall_mm": float(
+                    decision["rainfall_mm"]
+                )
+            }
+
+            try:
+
+                audit_store.save_decision(
+                    record
+                )
+
+                st.success(
+                    f"Decision {decision_id} successfully "
+                    f"saved to SQLite."
+                )
+
+            except Exception as error:
+
+                st.error(
+                    f"Unable to save decision: {error}"
+                )
+
+    # --------------------------------------------------------
+    # AUDIT HISTORY
+    # --------------------------------------------------------
+
+    st.divider()
+
+    st.subheader(
+        "SQLite Audit History"
+    )
+
+    try:
+
+        audit_data = audit_store.get_all_decisions()
+
+        if len(audit_data) == 0:
 
             st.info(
                 "No decisions have been recorded yet."
             )
 
-    except Exception as e:
+        else:
+
+            st.dataframe(
+                audit_data,
+                use_container_width=True,
+                hide_index=True
+            )
+
+            st.caption(
+                f"{len(audit_data)} audited decision(s) "
+                "stored in SQLite."
+            )
+
+    except Exception as error:
 
         st.error(
-            f"Unable to read audit trail: {e}"
-        )
-
-else:
-
-    st.info(
-        "No audit file found. "
-        "Submit a decision to create the audit trail."
-    )
-
-
-# =========================================================
-# END OF DASHBOARD
-# =========================================================
-
-# =========================================================
-# MEASURABLE EXPERIMENT
-# =========================================================
-
-st.divider()
-
-st.subheader(
-    "📈 Reliability Priority Justification"
-)
-
-st.write(
-    """
-    This metric measures the percentage of reliability
-    priorities supported by measured service and user-impact
-    evidence.
-    """
-)
-
-
-# ---------------------------------------------------------
-# BASELINE / TARGET / CURRENT RESULT
-# ---------------------------------------------------------
-
-BASELINE = 0.0
-TARGET = 80.0
-
-CURRENT_RESULT = priority_metrics[
-    "justification_percentage"
-]
-
-IMPROVEMENT = (
-    CURRENT_RESULT - BASELINE
-)
-
-
-metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
-
-
-with metric_col1:
-
-    st.metric(
-        "Baseline",
-        f"{BASELINE}%"
-    )
-
-
-with metric_col2:
-
-    st.metric(
-        "Target",
-        f"{TARGET}%"
-    )
-
-
-with metric_col3:
-
-    st.metric(
-        "Measured Result",
-        f"{CURRENT_RESULT}%"
-    )
-
-
-with metric_col4:
-
-    st.metric(
-        "Improvement",
-        f"+{IMPROVEMENT:.2f} pp"
-    )
-
-
-# ---------------------------------------------------------
-# TARGET STATUS
-# ---------------------------------------------------------
-
-if CURRENT_RESULT >= TARGET:
-
-    st.success(
-        "✅ Target achieved: reliability priorities "
-        "are sufficiently supported by measured evidence."
-    )
-
-else:
-
-    st.warning(
-        "⚠️ Target not yet achieved. "
-        "More reliability priorities need measurable evidence."
-    )
-
-
-# ---------------------------------------------------------
-# EXPERIMENT DETAILS
-# ---------------------------------------------------------
-
-st.markdown(
-    "### 🧪 Experiment Definition"
-)
-
-st.write(
-    """
-    **Baseline:** Reliability tasks are evaluated without
-    an explicit measured user-impact justification.
-
-    **Target:** At least 80% of reliability priorities should
-    be supported by measured evidence.
-
-    **Measured result:** Calculated using SLI, SLO,
-    error-budget status and user-impact measurements.
-
-    **Justification rule:** A reliability priority is considered
-    justified when at least one significant measured risk exists:
-    SLO breach, high user impact, or low remaining error budget.
-    """
-)
-
-
-# ---------------------------------------------------------
-# DETAILED RESULTS
-# ---------------------------------------------------------
-
-st.markdown(
-    "### 🔎 Priority Justification Details"
-)
-
-details = priority_metrics["details"]
-
-
-if len(details) > 0:
-
-    st.dataframe(
-        details,
-        use_container_width=True
-    )
-
-else:
-
-    st.info(
-        "No reliability priority data available."
-    )
-
-
-# ---------------------------------------------------------
-# ERROR ANALYSIS
-# ---------------------------------------------------------
-
-st.markdown(
-    "### ⚠️ Error Analysis"
-)
-
-if len(details) > 0:
-
-    unjustified = details[
-        details["justified"] == False
-    ]
-
-    if len(unjustified) == 0:
-
-        st.success(
-            "No unjustified reliability priorities "
-            "were found in the current validation dataset."
-        )
-
-    else:
-
-        st.warning(
-            f"{len(unjustified)} reliability priorities "
-            "do not currently have sufficient measured evidence."
-        )
-
-        st.dataframe(
-            unjustified[
-                [
-                    "task_id",
-                    "task_title",
-                    "locality",
-                    "task_priority",
-                    "SLI",
-                    "user_impact",
-                    "error_budget_remaining"
-                ]
-            ],
-            use_container_width=True
-        )
-        # =========================================================
-# EVENT RELIABILITY SIMULATOR
-# =========================================================
-
-st.divider()
-
-st.subheader(
-    "⚡ Event Reliability Simulator"
-)
-
-st.write(
-    """
-    Simulate real-world event delivery problems such as
-    duplicate, delayed and out-of-order events. The processor
-    protects the current order state from invalid updates.
-    """
-)
-
-
-# =========================================================
-# GET EVENT PROCESSOR
-# =========================================================
-
-processor = st.session_state.event_processor
-
-
-# =========================================================
-# EVENT CREATION FUNCTION
-# =========================================================
-
-def create_event(
-    event_id,
-    order_id,
-    event_time,
-    status
-):
-
-    return {
-        "event_id": event_id,
-        "order_id": order_id,
-        "event_time": event_time,
-        "status": status
-    }
-
-
-# =========================================================
-# SIMULATION BUTTONS
-# =========================================================
-
-st.markdown(
-    "### 🧪 Failure Scenario Tests"
-)
-
-
-col1, col2, col3, col4 = st.columns(4)
-
-
-# ---------------------------------------------------------
-# NORMAL EVENT
-# ---------------------------------------------------------
-
-with col1:
-
-    if st.button(
-        "🔵 Normal Event"
-    ):
-
-        event = create_event(
-            "SIM001",
-            "ORDER001",
-            "2026-09-07T10:00:00",
-            "PLACED"
-        )
-
-        result = processor.process_event(
-            event
-        )
-
-        st.session_state.last_event_result = result
-
-
-# ---------------------------------------------------------
-# DUPLICATE EVENT
-# ---------------------------------------------------------
-
-with col2:
-
-    if st.button(
-        "🔴 Duplicate Event"
-    ):
-
-        event = create_event(
-            "SIM001",
-            "ORDER001",
-            "2026-09-07T10:00:00",
-            "PLACED"
-        )
-
-        result = processor.process_event(
-            event
-        )
-
-        st.session_state.last_event_result = result
-
-
-# ---------------------------------------------------------
-# OUT-OF-ORDER EVENT
-# ---------------------------------------------------------
-
-with col3:
-
-    if st.button(
-        "🟣 Out-of-Order"
-    ):
-
-        event = create_event(
-            "SIM002",
-            "ORDER001",
-            "2026-09-07T09:59:00",
-            "ACCEPTED"
-        )
-
-        result = processor.process_event(
-            event
-        )
-
-        st.session_state.last_event_result = result
-
-
-# ---------------------------------------------------------
-# DELAYED EVENT
-# ---------------------------------------------------------
-
-with col4:
-
-    if st.button(
-        "🟠 Delayed Event"
-    ):
-
-        event = create_event(
-            "SIM003",
-            "ORDER002",
-            "2026-09-07T09:00:00",
-            "PLACED"
-        )
-
-        result = processor.process_event(
-            event
-        )
-
-        st.session_state.last_event_result = result
-
-
-# =========================================================
-# DISPLAY LAST EVENT RESULT
-# =========================================================
-
-if "last_event_result" in st.session_state:
-
-    result = st.session_state.last_event_result
-
-    st.markdown(
-        "### 📡 Latest Event Result"
-    )
-
-    if result["status"] == "processed":
-
-        st.success(
-            f"✅ {result['message']}"
-        )
-
-    elif result["status"] == "duplicate":
-
-        st.error(
-            "🔴 Duplicate event detected and ignored."
-        )
-
-    elif result["status"] == "out_of_order":
-
-        st.warning(
-            "🟣 Out-of-order event detected. "
-            "Existing newer state was protected."
-        )
-
-    elif result["status"] == "delayed":
-
-        st.warning(
-            "🟠 Delayed event detected and safely processed."
-        )
-
-    st.json(result)
-
-
-# =========================================================
-# CURRENT ORDER STATE
-# =========================================================
-
-st.markdown(
-    "### 📦 Current Order State"
-)
-
-
-if len(processor.order_state) > 0:
-
-    state_rows = []
-
-    for order_id, state in processor.order_state.items():
-
-        state_rows.append(
-            {
-                "Order ID": order_id,
-                "Current Status": state["status"],
-                "Latest Event Time":
-                    state["event_time"].isoformat()
-            }
-        )
-
-    state_df = pd.DataFrame(
-        state_rows
-    )
-
-    st.dataframe(
-        state_df,
-        use_container_width=True
-    )
-
-else:
-
-    st.info(
-        "No events have been processed yet."
-    )
-
-
-# =========================================================
-# EVENT PROCESSING STATISTICS
-# =========================================================
-
-st.markdown(
-    "### 📊 Event Processing Statistics"
-)
-
-
-stats = processor.get_statistics()
-
-
-stat_col1, stat_col2, stat_col3, stat_col4 = st.columns(4)
-
-
-with stat_col1:
-
-    st.metric(
-        "Processed",
-        stats["processed"]
-    )
-
-
-with stat_col2:
-
-    st.metric(
-        "Duplicates",
-        stats["duplicates"]
-    )
-
-
-with stat_col3:
-
-    st.metric(
-        "Delayed",
-        stats["delayed"]
-    )
-
-
-with stat_col4:
-
-    st.metric(
-        "Out-of-Order",
-        stats["out_of_order"]
-    )
-
-
-# =========================================================
-# RECOVERY TEST
-# =========================================================
-
-st.markdown(
-    "### 🔄 Recovery Demonstration"
-)
-
-st.write(
-    """
-    The recovery test sends a sequence containing normal,
-    duplicate and out-of-order events. The final state should
-    remain consistent with the newest valid event.
-    """
-)
-
-
-if st.button(
-    "🟢 Run Recovery Test"
-):
-
-    recovery_processor = EventProcessor(
-        allowed_delay_seconds=30
-    )
-
-    recovery_events = [
-
-        create_event(
-            "R001",
-            "RECOVERY001",
-            "2026-09-07T10:00:00",
-            "PLACED"
-        ),
-
-        create_event(
-            "R002",
-            "RECOVERY001",
-            "2026-09-07T10:00:10",
-            "ACCEPTED"
-        ),
-
-        # Out-of-order event
-        create_event(
-            "R003",
-            "RECOVERY001",
-            "2026-09-07T10:00:05",
-            "PLACED"
-        ),
-
-        # Duplicate event
-        create_event(
-            "R002",
-            "RECOVERY001",
-            "2026-09-07T10:00:10",
-            "ACCEPTED"
-        ),
-
-        # New valid event
-        create_event(
-            "R004",
-            "RECOVERY001",
-            "2026-09-07T10:00:20",
-            "PICKED_UP"
-        )
-    ]
-
-
-    recovery_results = []
-
-    for event in recovery_events:
-
-        result = recovery_processor.process_event(
-            event
-        )
-
-        recovery_results.append(
-            {
-                "Event ID": event["event_id"],
-                "Status": result["status"],
-                "Event State": event["status"]
-            }
+            f"Unable to read SQLite audit history: {error}"
         )
 
 
-    st.dataframe(
-        pd.DataFrame(recovery_results),
-        use_container_width=True
+# ============================================================
+# TAB 4 — VALIDATION
+# ============================================================
+
+with tab_validation:
+
+    st.header(
+        "Reliability Priority Justification"
     )
 
-
-    final_state = recovery_processor.get_order_state(
-        "RECOVERY001"
-    )
-
-
-    st.success(
-        f"✅ Recovery successful. "
-        f"Final order state: {final_state['status']}"
+    st.caption(
+        "Measured validation of whether reliability priorities "
+        "are supported by operational evidence."
     )
 
     st.write(
-        "Expected final state: **PICKED_UP**"
+        "This experiment measures how often reliability priorities "
+        "are supported by measured operational evidence."
     )
+
+    try:
+
+        # --------------------------------------------------------
+        # EXISTING JUSTIFICATION EXPERIMENT
+        # --------------------------------------------------------
+
+        experiment = calculate_priority_justification(
+            service,
+            weather,
+            support,
+            reliability
+        )
+
+        total = experiment[
+            "total_priorities"
+        ]
+
+        justified = experiment[
+            "justified_priorities"
+        ]
+
+        percentage = experiment[
+            "justification_percentage"
+        ]
+
+        baseline = 0
+
+        c1, c2, c3, c4 = st.columns(4)
+
+        with c1:
+
+            st.metric(
+                "Reliability Priorities",
+                total
+            )
+
+        with c2:
+
+            st.metric(
+                "Evidence-Justified",
+                justified
+            )
+
+        with c3:
+
+            st.metric(
+                "Justification Rate",
+                f"{percentage:.2f}%"
+            )
+
+        with c4:
+
+            st.metric(
+                "Baseline",
+                f"{baseline}%"
+            )
+
+        st.divider()
+
+        # --------------------------------------------------------
+        # EXPERIMENT INTERPRETATION
+        # --------------------------------------------------------
+
+        st.subheader(
+            "Experiment Interpretation"
+        )
+
+        st.write(
+            f"Measured justification rate: "
+            f"**{percentage:.2f}%**."
+        )
+
+        st.write(
+            "A priority is considered justified when at least one "
+            "measurable condition indicates operational need: "
+            "an SLO breach, high user impact, or low remaining "
+            "error budget."
+        )
+
+        if total > 0:
+
+            st.progress(
+                min(
+                    percentage / 100,
+                    1.0
+                )
+            )
+
+        st.divider()
+
+        # --------------------------------------------------------
+        # PRIORITY EVIDENCE DETAILS
+        # --------------------------------------------------------
+
+        st.subheader(
+            "Priority Evidence Details"
+        )
+
+        details = experiment[
+            "details"
+        ]
+
+        if len(details) > 0:
+
+            st.dataframe(
+                details,
+                use_container_width=True,
+                hide_index=True
+            )
+
+        else:
+
+            st.info(
+                "No reliability priority records available."
+            )
+
+        st.divider()
+
+        # ========================================================
+        # SENSITIVITY ANALYSIS
+        # ========================================================
+
+        st.header(
+            "Decision Weight Sensitivity Analysis"
+        )
+
+        st.caption(
+            "Tests how changes in decision-engine weighting "
+            "coefficients affect the reliability priority score."
+        )
+
+        st.write(
+            "The baseline decision model uses four evidence "
+            "dimensions: SLO risk, user impact, error-budget risk, "
+            "and weather conditions."
+        )
+
+        # --------------------------------------------------------
+        # BASELINE WEIGHTS
+        # --------------------------------------------------------
+
+        st.subheader(
+            "Baseline Decision Weights"
+        )
+
+        weight_col1, weight_col2, weight_col3, weight_col4 = (
+            st.columns(4)
+        )
+
+        with weight_col1:
+
+            st.metric(
+                "SLO Risk",
+                "40%"
+            )
+
+        with weight_col2:
+
+            st.metric(
+                "User Impact",
+                "35%"
+            )
+
+        with weight_col3:
+
+            st.metric(
+                "Error Budget",
+                "15%"
+            )
+
+        with weight_col4:
+
+            st.metric(
+                "Weather",
+                "10%"
+            )
+
+        st.info(
+            "The sensitivity experiment changes one or more "
+            "weighting coefficients while keeping the total "
+            "weight equal to 100%."
+        )
+
+        # --------------------------------------------------------
+        # RUN SENSITIVITY ANALYSIS
+        # --------------------------------------------------------
+
+        if len(service) > 0:
+
+            # Use the locality selected in the sidebar.
+            selected_service_rows = service[
+                service["locality"] == selected_locality
+            ]
+            selected_weather_rows = weather[
+                weather["locality"] == selected_locality
+            ]
+
+            selected_support_rows = support[
+                support["locality"] == selected_locality
+            ]
+
+            if len(selected_service_rows) > 0:
+
+                service_row = selected_service_rows.iloc[-1]
+
+            else:
+
+                service_row = service.iloc[-1]
+
+            if len(selected_weather_rows) > 0:
+
+                weather_row = selected_weather_rows.iloc[-1]
+
+            else:
+
+                weather_row = weather.iloc[-1]
+
+            if len(selected_support_rows) > 0:
+
+                support_row = selected_support_rows.iloc[-1]
+
+            else:
+
+                support_row = pd.Series(
+                    {
+                        "customer_complaints": 0
+                    }
+                )
+
+            sensitivity_results = run_sensitivity_analysis(
+                service_row,
+                support_row,
+                weather_row
+            )
+
+            stability = calculate_priority_stability(
+                sensitivity_results
+            )
+
+            # ----------------------------------------------------
+            # SENSITIVITY KPI
+            # ----------------------------------------------------
+
+            st.subheader(
+                "Sensitivity Result"
+            )
+
+            sc1, sc2, sc3 = st.columns(3)
+
+            with sc1:
+
+                st.metric(
+                    "Scenarios Tested",
+                    len(sensitivity_results)
+                )
+
+            with sc2:
+
+                st.metric(
+                    "Baseline Priority",
+                    sensitivity_results.iloc[0]["priority"]
+                )
+
+            with sc3:
+
+                st.metric(
+                    "Priority Stability",
+                    f"{stability:.2f}%"
+                )
+
+            st.write(
+                f"**Locality analysed:** {selected_locality}"
+            )
+
+            st.write(
+                "Priority stability measures how often the "
+                "priority classification remains the same as "
+                "the baseline when the weighting coefficients "
+                "are changed."
+            )
+
+            # ----------------------------------------------------
+            # SENSITIVITY TABLE
+            # ----------------------------------------------------
+
+            st.subheader(
+                "Weighting Scenario Comparison"
+            )
+
+            display_results = sensitivity_results.copy()
+
+            display_results[
+                "slo_weight"
+            ] = (
+                display_results["slo_weight"] * 100
+            ).round(0).astype(int).astype(str) + "%"
+
+            display_results[
+                "user_impact_weight"
+            ] = (
+                display_results["user_impact_weight"] * 100
+            ).round(0).astype(int).astype(str) + "%"
+
+            display_results[
+                "error_budget_weight"
+            ] = (
+                display_results["error_budget_weight"] * 100
+            ).round(0).astype(int).astype(str) + "%"
+
+            display_results[
+                "weather_weight"
+            ] = (
+                display_results["weather_weight"] * 100
+            ).round(0).astype(int).astype(str) + "%"
+
+            display_results = display_results.rename(
+                columns={
+                    "scenario": "Scenario",
+                    "slo_weight": "SLO Risk",
+                    "user_impact_weight": "User Impact",
+                    "error_budget_weight": "Error Budget",
+                    "weather_weight": "Weather",
+                    "priority_score": "Priority Score",
+                    "priority": "Priority"
+                }
+            )
+
+            st.dataframe(
+                display_results[
+                    [
+                        "Scenario",
+                        "SLO Risk",
+                        "User Impact",
+                        "Error Budget",
+                        "Weather",
+                        "Priority Score",
+                        "Priority"
+                    ]
+                ],
+                use_container_width=True,
+                hide_index=True
+            )
+
+            # ----------------------------------------------------
+            # INTERPRETATION
+            # ----------------------------------------------------
+
+            st.subheader(
+                "Sensitivity Interpretation"
+            )
+
+            baseline_score = sensitivity_results.iloc[0][
+                "priority_score"
+            ]
+
+            minimum_score = sensitivity_results[
+                "priority_score"
+            ].min()
+
+            maximum_score = sensitivity_results[
+                "priority_score"
+            ].max()
+
+            st.write(
+                f"The baseline priority score is "
+                f"**{baseline_score:.2f}**."
+            )
+
+            st.write(
+                f"Across the tested weighting scenarios, "
+                f"the priority score ranges from "
+                f"**{minimum_score:.2f}** to "
+                f"**{maximum_score:.2f}**."
+            )
+
+            st.write(
+                f"The priority classification matched the "
+                f"baseline in **{stability:.2f}%** of the "
+                f"tested scenarios."
+            )
+
+            st.caption(
+                "This sensitivity analysis is an experiment, "
+                "not a claim that one weighting scheme is "
+                "universally correct."
+            )
+
+        else:
+
+            st.info(
+                "Sensitivity analysis requires available "
+                "service telemetry data."
+            )
+
+    except Exception as error:
+
+        st.error(
+            "Validation experiment could not be calculated: "
+            + str(error)
+        )
+
+
+# ============================================================
+# TAB 5 — RELIABILITY TESTS
+# ============================================================
+
+with tab_reliability:
+
+    st.header(
+        "Telemetry Event Recovery Tests"
+    )
+
+    st.caption(
+        "Tests protection against duplicate, delayed and "
+        "out-of-order telemetry events."
+    )
+
+    st.write(
+        "The event processor protects order state from duplicate, "
+        "delayed and out-of-order telemetry events."
+    )
+
+    # --------------------------------------------------------
+    # TEST CASE SUMMARY
+    # --------------------------------------------------------
+
+    test1, test2, test3 = st.columns(3)
+
+    with test1:
+
+        st.info(
+            "**Duplicate Events**\n\n"
+            "The same event_id is received again.\n\n"
+            "Expected: ignore duplicate."
+        )
+
+    with test2:
+
+        st.info(
+            "**Out-of-Order Events**\n\n"
+            "An older timestamp arrives after a newer event.\n\n"
+            "Expected: preserve newer state."
+        )
+
+    with test3:
+
+        st.info(
+            "**Delayed Events**\n\n"
+            "An event arrives significantly later.\n\n"
+            "Expected: detect delay safely."
+        )
+
+    st.divider()
+
+    # --------------------------------------------------------
+    # RUN TEST
+    # --------------------------------------------------------
+
+    if st.button(
+        "Run Recovery Test",
+        type="primary"
+    ):
+
+        processor = EventProcessor(
+            allowed_delay_seconds=30
+        )
+
+        base_time = datetime.now().replace(
+            microsecond=0
+        )
+
+        test_events = [
+
+            {
+                "event_id": "EVT-001",
+                "order_id": "ORD-1001",
+                "event_time": base_time.isoformat(),
+                "status": "PLACED"
+            },
+
+            {
+                "event_id": "EVT-002",
+                "order_id": "ORD-1001",
+                "event_time": (
+                    base_time
+                    + timedelta(seconds=10)
+                ).isoformat(),
+                "status": "PREPARING"
+            },
+
+            {
+                "event_id": "EVT-003",
+                "order_id": "ORD-1001",
+                "event_time": (
+                    base_time
+                    + timedelta(seconds=5)
+                ).isoformat(),
+                "status": "CONFIRMED"
+            },
+
+            {
+                "event_id": "EVT-004",
+                "order_id": "ORD-1001",
+                "event_time": (
+                    base_time
+                    - timedelta(seconds=60)
+                ).isoformat(),
+                "status": "PLACED"
+            },
+
+            {
+                "event_id": "EVT-002",
+                "order_id": "ORD-1001",
+                "event_time": (
+                    base_time
+                    + timedelta(seconds=10)
+                ).isoformat(),
+                "status": "PREPARING"
+            }
+        ]
+
+        results = []
+
+        for event in test_events:
+
+            result = processor.process_event(
+                event
+            )
+
+            results.append(
+                {
+                    "Event": event["event_id"],
+                    "Result": result["status"],
+                    "Message": result["message"]
+                }
+            )
+
+        st.subheader(
+            "Event Processing Results"
+        )
+
+        st.dataframe(
+            pd.DataFrame(results),
+            use_container_width=True,
+            hide_index=True
+        )
+
+        st.subheader(
+            "Processor Statistics"
+        )
+
+        stats = processor.get_statistics()
+
+        s1, s2, s3, s4 = st.columns(4)
+
+        with s1:
+
+            st.metric(
+                "Processed",
+                stats["processed"]
+            )
+
+        with s2:
+
+            st.metric(
+                "Duplicates",
+                stats["duplicates"]
+            )
+
+        with s3:
+
+            st.metric(
+                "Delayed",
+                stats["delayed"]
+            )
+
+        with s4:
+
+            st.metric(
+                "Out of Order",
+                stats["out_of_order"]
+            )
+
+        st.divider()
+
+        state = processor.get_order_state(
+            "ORD-1001"
+        )
+
+        st.subheader(
+            "Final Order State"
+        )
+
+        if state:
+
+            st.success(
+                f"Final status: **{state['status']}**"
+            )
+
+            st.write(
+                "The processor keeps the state associated with "
+                "the latest valid event timestamp. This prevents "
+                "older events from corrupting the current order state."
+            )
+
+        else:
+
+            st.warning(
+                "No order state found."
+            )
+
+
+# ============================================================
+# FOOTER
+# ============================================================
+
+st.divider()
+
+st.caption(
+    "FoodPulse SLO Decision Center | "
+    "Reliability Engineering Prototype | "
+    "Human-in-the-loop governance | "
+    "SQLite audit persistence"
+)
